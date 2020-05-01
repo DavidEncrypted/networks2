@@ -3,11 +3,17 @@
  * Universiteit Leiden.
  */
 
+
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
+
+#include <arpa/inet.h>
 #include <netinet/in.h>
 
 #include <alsa/asoundlib.h>
@@ -16,6 +22,10 @@
 
 #define BIND_PORT 1235
 
+#define BUFLEN 512
+#define NPACK 10
+#define PORT 9930
+#define SRV_IP "127.0.0.1"
 
 #define NUM_CHANNELS 2
 #define SAMPLE_RATE 44100
@@ -23,16 +33,49 @@
 // 1 Frame = Stereo 16 bit = 32 bit = 4kbit
 #define FRAME_SIZE 4
 
+void diep(char *s)
+{
+  perror(s);
+  exit(1);
+}
+
 int main(int argc, char **argv) {
     //int buffer_size = 1024;
     int bind_port = BIND_PORT;
-    
+
     unsigned blocksize = 0;
 
 
     // TODO: Parse command-line options
 
     // TODO: Set up network connection
+    struct sockaddr_in si_other;
+    int s, j, slen=sizeof(si_other);
+    char buf[BUFLEN];
+
+    if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
+      diep("socket");
+
+    memset((char *) &si_other, 0, sizeof(si_other));
+    si_other.sin_family = AF_INET;
+    si_other.sin_port = htons(PORT);
+    if (inet_aton(SRV_IP, &si_other.sin_addr)==0) {
+      fprintf(stderr, "inet_aton() failed\n");
+      exit(1);
+    }
+
+    for (j=0; j<NPACK; j++) {
+      printf("Sending packet %d\n", j);
+      sprintf(buf, "This is packet %d\n", j);
+      if (sendto(s, buf, BUFLEN, 0, &si_other, slen)==-1)
+        diep("sendto()");
+    }
+
+    close(s);
+
+
+
+
 
     // Open audio device
     snd_pcm_t *snd_handle;

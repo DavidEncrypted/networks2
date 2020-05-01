@@ -2,7 +2,10 @@
  * Skeleton-code behorende bij het college Netwerken, opleiding Informatica,
  * Universiteit Leiden.
  */
-
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,9 +14,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include <netinet/in.h>
 
 #include "../communication/asp/asp.h"
+
+#define BUFLEN 512
+#define NPACK 10
+#define PORT 9930
 
 static int asp_socket_fd = -1;
 
@@ -108,14 +114,43 @@ static void close_wave_file(struct wave_file *wf) {
     close(wf->fd);
 }
 
+void diep(char *s)
+{
+  perror(s);
+  exit(1);
+}
+
 int main(int argc, char **argv) {
 
-    // TODO: Parse command-line options 
-    char *filename;
+    // TODO: Parse command-line options
+    char *filename = "tubthumping.wav";
 
     // Open the WAVE file
     if (open_wave_file(&wf, filename) < 0)
         return -1;
+
+    struct sockaddr_in si_me, si_other;
+    int s, i, slen=sizeof(si_other);
+    char buf[BUFLEN];
+
+    if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
+      diep("socket");
+
+    memset((char *) &si_me, 0, sizeof(si_me));
+    si_me.sin_family = AF_INET;
+    si_me.sin_port = htons(PORT);
+    si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(s, &si_me, sizeof(si_me))==-1)
+      diep("bind");
+
+    for (i=0; i<NPACK; i++) {
+      if (recvfrom(s, buf, BUFLEN, 0, &si_other, &slen)==-1)
+        diep("recvfrom()");
+      printf("Received packet from %s:%d\nData: %s\n\n",
+      inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port), buf);
+    }
+
+    close(s);
 
 
     // TODO: Read and send audio data
