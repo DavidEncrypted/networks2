@@ -1,0 +1,100 @@
+DESCRIBE
+The client asks the server to describe the audio file and the connection.
+The client waits for the response with the same CSeq as the sent packet.
+After a time-out it resends a DESCRIBE with a different CSeq.
+
+
+C -> S: DESCRIBE server_ip ASP/0.1
+        CSeq: 120
+
+S -> C: ASP/0.1 200 OK
+        CSeq: 120
+        audio-type: WAVE
+        audio-length: 3411
+        audio-name: tubthumping.wav
+        ...
+
+
+SETUP
+The client asks the server to start a session and load the audio file.
+The client tells the server which ip and port to use. The server responds with
+the session id and tells the client what its ip and port are.
+
+
+C -> S: SETUP 127.0.0.2 ASP/0.1
+        CSeq: 151
+        client_ip: 127.0.0.1
+        client_port: 1234
+
+S -> C: ASP/0.1 200 OK
+        CSeq: 151
+        session: 12345678
+        client_ip: 127.0.0.1
+        client_port: 1234
+        server_ip: 127.0.0.2
+        server_port: 543
+
+
+PLAY
+The client asks the server to start the stream of the audio file. This can only
+be sent after a SETUP has finished. The session from the SETUP is used.
+The range parameter tells the server which parts of the file to transmit. For now
+it is optional and might not be implemented.
+
+
+C -> S: PLAY 127.0.0.2 ASP/0.1
+        CSeq: 241
+        session: 12345678
+        range: 0 - 20         // optional, probably will not be implemented
+
+S -> C: ASP/0.1 200 OK
+        CSeq: 241
+        session: 12345678
+
+PAUSE
+When PLAY has been sent and the server is streaming data the user can send
+the PAUSE command to temporarily pause the streaming. The server stores when the
+stream has been paused and will continue from this point of the PLAY command is recieved.
+
+C -> S: PAUSE 127.0.0.2 ASP/0.1
+        CSeq: 591
+        session: 12345678
+
+S -> C: ASP/0.1 200 OK
+        CSeq: 591
+        session: 12345678
+
+TEARDOWN
+The client sends the TEARDOWN command to the server to stop the streaming and the
+connection with the server. The server deletes all data allocated for this session.
+
+C -> S: TEARDOWN 127.0.0.2 ASP/0.1
+        CSeq: 891
+        session: 12345678
+
+S -> C: ASP/0.1 200 OK
+        CSeq: 891
+
+
+
+
+When streaming the data is sent using this format:
+
+Format
+------
+
+
+                  0      7 8     15 16    23 24    31
+                 +--------+--------+--------+--------+
+                 |     Source      |   Destination   |
+                 |      Port       |      Port       |
+                 +--------+--------+--------+--------+
+                 |                 |                 |
+                 |     Length      |       ???       |
+                 +--------+--------+--------+--------+
+                 |                 |                 |
+                 |    Block ID     |    Checksum     |
+                 +--------+--------+--------+--------+
+                 |
+                 |          Data Block
+                 +---------------- ...
