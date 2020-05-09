@@ -1,6 +1,8 @@
 /*
  * Skeleton-code behorende bij het college Netwerken, opleiding Informatica,
  * Universiteit Leiden.
+ *
+ * Submission by: David Schep s2055961
  */
 #include <arpa/inet.h>
 #include <netinet/in.h>

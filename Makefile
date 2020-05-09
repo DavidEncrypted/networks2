@@ -1,5 +1,7 @@
 # Skeleton Computer networks, Leiden University
 
+# Submission by: David Schep s2055961
+
 CC      ?= gcc
 SRC      = src
 OBJS     = obj

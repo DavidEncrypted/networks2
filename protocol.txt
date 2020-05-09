@@ -1,3 +1,7 @@
+Submission by: David Schep s2055961
+
+Heavily inspired by the RTSP: https://tools.ietf.org/html/rfc2326#page-29
+
 DESCRIBE
 The client asks the server to describe the audio file and the connection.
 The client waits for the response with the same CSeq as the sent packet.
@@ -55,6 +59,10 @@ PAUSE
 When PLAY has been sent and the server is streaming data the user can send
 the PAUSE command to temporarily pause the streaming. The server stores when the
 stream has been paused and will continue from this point of the PLAY command is recieved.
+pauseblock is the number of the block the server will pause at. If the last data
+packet recieved has a different block number the client should, when sending the
+PLAY command, also send the block number it paused at to make sure the server doesn't
+skip data blocks.
 
 C -> S: PAUSE 127.0.0.2 ASP/0.1
         CSeq: 591
@@ -63,6 +71,7 @@ C -> S: PAUSE 127.0.0.2 ASP/0.1
 S -> C: ASP/0.1 200 OK
         CSeq: 591
         session: 12345678
+        pauseblock: 2103
 
 TEARDOWN
 The client sends the TEARDOWN command to the server to stop the streaming and the
@@ -75,25 +84,24 @@ C -> S: TEARDOWN 127.0.0.2 ASP/0.1
 S -> C: ASP/0.1 200 OK
         CSeq: 891
 
-
+These communication methods would be best to send using TCP. But since the assignment
+is supposed to use IP/UDP the client will resend messages if the server did not respond
+with 200 OK. After a time out.
 
 
 When streaming the data is sent using this format:
-
+(very subject to change upon implementation)
 Format
 ------
 
 
                   0      7 8     15 16    23 24    31
                  +--------+--------+--------+--------+
-                 |     Source      |   Destination   |
-                 |      Port       |      Port       |
+                 |                 |                 |
+                 |     Length      |       Cseq      | //Cseq might nog be necessary, I will decide when implementing.
                  +--------+--------+--------+--------+
                  |                 |                 |
-                 |     Length      |       ???       |
-                 +--------+--------+--------+--------+
-                 |                 |                 |
-                 |    Block ID     |    Checksum     |
+                 |    Block Numb.  |    Checksum     |
                  +--------+--------+--------+--------+
                  |
                  |          Data Block
