@@ -6,9 +6,11 @@
  */
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -19,9 +21,7 @@
 
 #include "../communication/asp/asp.h"
 
-#define BUFLEN 512
-#define NPACK 10
-#define PORT 9930
+
 
 static int asp_socket_fd = -1;
 
@@ -116,49 +116,135 @@ static void close_wave_file(struct wave_file *wf) {
     close(wf->fd);
 }
 
-void diep(char *s)
-{
-  perror(s);
-  exit(1);
-}
+
+#define DATA "Danger Will Roger . . ."
+#define TRUE 1
+#define SERVER_PORT 5001
+#define BUFFER_SIZE 1024
+
+
+/* prototypes */
+void die(const char *);
+void pdie(const char *);
+
 
 int main(int argc, char **argv) {
 
-    // TODO: Parse command-line options
-    char *filename = "tubthumping.wav";
+  int sock;   /* fd for main socket */
+  int msgsock;   /* fd from accept return */
+  struct sockaddr_in server;   /* socket struct for server connection */
+  struct sockaddr_in client;   /* socket struct for client connection */
+  int clientLen;   /* returned length of client from accept() */
+  int rval;   /* return value from read() */
+  char buf[BUFFER_SIZE];   /* receive buffer */
 
-    // Open the WAVE file
-    if (open_wave_file(&wf, filename) < 0)
-        return -1;
+  /* Open a socket, not bound yet.  Type is Internet TCP. */
+  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+  pdie("Opening stream socket");
 
-    struct sockaddr_in si_me, si_other;
-    int s, i, slen=sizeof(si_other);
-    char buf[BUFLEN];
+  /*
+  Prepare to bind.  Permit Internet connections from any client
+  to our SERVER_PORT.
+  */
+  bzero((char *) &server, sizeof(server));
+  server.sin_family = AF_INET;
+  server.sin_addr.s_addr = INADDR_ANY;
+  server.sin_port = htons(SERVER_PORT);
+  if (bind(sock, (struct sockaddr *) &server, sizeof(server)))
+  pdie("Binding stream socket");
 
-    if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
-      diep("socket");
+  printf("Socket has port %hu\n", ntohs(server.sin_port));
 
-    memset((char *) &si_me, 0, sizeof(si_me));
-    si_me.sin_family = AF_INET;
-    si_me.sin_port = htons(PORT);
-    si_me.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(s, &si_me, sizeof(si_me))==-1)
-      diep("bind");
-
-    for (i=0; i<NPACK; i++) {
-      if (recvfrom(s, buf, BUFLEN, 0, &si_other, &slen)==-1)
-        diep("recvfrom()");
-      printf("Received packet from %s:%d\nData: %s\n\n",
-      inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port), buf);
-    }
-
-    close(s);
+  listen(s, 5);
 
 
-    // TODO: Read and send audio data
+  /* Loop, waiting for client connections. */
+  /* This is an interactive server. */
+  while (TRUE) {
 
-    // Clean up
-    close_wave_file(&wf);
+    clientLen = sizeof(client);
+    if ((msgsock = accept(sock, (struct sockaddr *) &client,
+                          &clientLen)) == -1)
+       pdie("Accept");
+    else {
+       /* Print information about the client. */
+       if (clientLen != sizeof(client))
+          pdie("Accept overwrote sockaddr structure.");
 
-    return 0;
+       printf("Client IP: %s\n", inet_ntoa(client.sin_addr));
+       printf("Client Port: %hu\n", ntohs(client.sin_port));
+
+       do {   /* Read from client until it's closed the connection. */
+          /* Prepare read buffer and read. */
+          bzero(buf, sizeof(buf));
+          if ((rval = read(msgsock, buf, BUFFER_SIZE)) < 0)
+             pdie("Reading stream message");
+
+          if (rval == 0)   /* Client has closed the connection */
+             fprintf(stderr, "Ending connection\n");
+          else
+             printf("S: %s\n", buf);
+
+          /* Write back to client. */
+          if (write(msgsock, DATA, sizeof(DATA)) < 0)
+             pdie("Writing on stream socket");
+
+       } while (rval != 0);
+    }   /* else */
+
+    close(msgsock);
+  }
+
+
+
+
+  // for (j=0; j<NPACK; j++) {
+  //   printf("Sending packet %d\n", j);
+  //   sprintf(buf, "This is packet %d\n", j);
+  //   if (sendto(s, buf, BUFLEN, 0, &si_other, slen)==-1)
+  //   diep("sendto()");
+  // }
+
+  // for (i=0; i<NPACK; i++) {
+  //   if (recvfrom(s, buf, BUFLEN, 0, &si_other, &slen)==-1)
+  //     diep("recvfrom()");
+  //   printf("Received packet from %s:%d\nData: %s\n\n",
+  //   inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port), buf);
+  // }
+
+
+  close(s);
+
+
+  // TODO: Read and send audio data
+
+  // Clean up
+  close_wave_file(&wf);
+
+  return 0;
+}
+
+
+
+
+/**********************************************************************
+ * pdie --- Call perror() to figure out what's going on and die.
+ **********************************************************************/
+
+void pdie(const char *mesg) {
+
+   perror(mesg);
+   exit(1);
+}
+
+
+/**********************************************************************
+ * die --- Print a message and die.
+ **********************************************************************/
+
+void die(const char *mesg) {
+
+   fputs(mesg, stderr);
+   fputc('\n', stderr);
+   exit(1);
 }

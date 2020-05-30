@@ -8,6 +8,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,10 +25,17 @@
 
 #define BIND_PORT 1235
 
-#define BUFLEN 512
-#define NPACK 10
-#define PORT 9930
-#define SRV_IP "127.0.0.1"
+
+
+#define DATA "The sea is calm tonight, the tide is full . . ."
+#define SERVER_PORT 5001
+#define BUFFER_SIZE 1024
+
+
+/* prototypes */
+void die(const char *);
+void pdie(const char *);
+
 
 #define NUM_CHANNELS 2
 #define SAMPLE_RATE 44100
@@ -35,45 +43,74 @@
 // 1 Frame = Stereo 16 bit = 32 bit = 4kbit
 #define FRAME_SIZE 4
 
-void diep(char *s)
-{
-  perror(s);
-  exit(1);
-}
 
 int main(int argc, char **argv) {
-    //int buffer_size = 1024;
-    int bind_port = BIND_PORT;
-
-    unsigned blocksize = 0;
 
 
-    // TODO: Parse command-line options
+  int sock;   /* fd for socket connection */
+  struct sockaddr_in server;   /* Socket info. for server */
+  struct sockaddr_in client;   /* Socket info. about us */
+  int clientLen;   /* Length of client socket struct. */
+  struct hostent *hp;   /* Return value from gethostbyname() */
+  char buf[BUFFER_SIZE];   /* Received data buffer */
+  int i;   /* loop counter */
 
-    // TODO: Set up network connection
-    struct sockaddr_in si_other;
-    int s, j, slen=sizeof(si_other);
-    char buf[BUFLEN];
+  if (argc != 2)
+    die("Usage: client hostname");
 
-    if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
-      diep("socket");
+  /* Open 3 sockets and send same message each time. */
 
-    memset((char *) &si_other, 0, sizeof(si_other));
-    si_other.sin_family = AF_INET;
-    si_other.sin_port = htons(PORT);
-    if (inet_aton(SRV_IP, &si_other.sin_addr)==0) {
-      fprintf(stderr, "inet_aton() failed\n");
-      exit(1);
+  for (i = 0; i < 3; ++i)
+  {
+    /* Open a socket --- not bound yet. */
+    /* Internet TCP type. */
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+       pdie("Opening stream socket");
+
+    /* Prepare to connect to server. */
+    bzero((char *) &server, sizeof(server));
+    server.sin_family = AF_INET;
+    if ((hp = gethostbyname(argv[1])) == NULL) {
+       sprintf(buf, "%s: unknown host\n", argv[1]);
+       die(buf);
     }
+    bcopy(hp->h_addr, &server.sin_addr, hp->h_length);
+    server.sin_port = htons((u_short) SERVER_PORT);
 
-    for (j=0; j<NPACK; j++) {
-      printf("Sending packet %d\n", j);
-      sprintf(buf, "This is packet %d\n", j);
-      if (sendto(s, buf, BUFLEN, 0, &si_other, slen)==-1)
-        diep("sendto()");
-    }
+    /* Try to connect */
+    if (connect(sock, (struct sockaddr *) &server, sizeof(server)) < 0)
+       pdie("Connecting stream socket");
 
-    close(s);
+    /* Determine what port client's using. */
+    clientLen = sizeof(client);
+    if (getsockname(sock, (struct sockaddr *) &client, &clientLen))
+       pdie("Getting socket name");
+
+    if (clientLen != sizeof(client))
+       die("getsockname() overwrote name structure");
+
+    printf("Client socket has port %hu\n", ntohs(client.sin_port));
+
+    /* Write out message. */
+    if (write(sock, DATA, sizeof(DATA)) < 0)
+       pdie("Writing on stream socket");
+
+    /* Prepare our buffer for a read and then read. */
+    bzero(buf, sizeof(buf));
+    if (read(sock, buf, BUFFER_SIZE) < 0)
+       pdie("Reading stream message");
+
+    printf("C: %s\n", buf);
+
+    /* Close this connection. */
+    close(sock);
+  }
+
+
+
+
+
+
 
 
 
