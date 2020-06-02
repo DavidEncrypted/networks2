@@ -67,9 +67,22 @@ int main(int argc, char **argv) {
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
     servaddr.sin_addr.s_addr = INADDR_ANY;
-    inet_pton(AF_INET, "127.0.0.1", &(servaddr.sin_addr));
+    inet_pton(AF_INET, "192.168.178.25", &(servaddr.sin_addr));
     int n;
     socklen_t len;
+
+
+    // if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) == -1) {
+    //             perror("bind");
+    //             close(sockfd);
+    //             exit(1);
+    //         }
+
+    if (connect(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) == -1) {
+        perror("connect");
+        close(sockfd);
+        exit(1);
+    }
 
 
     char serv_sin_str[124];
@@ -145,7 +158,7 @@ int main(int argc, char **argv) {
 
     int skippedframes = 0;
 
-    for (int k = 0; k < 40; k++){
+    for (int k = 0; k < 2000; k++){
         do {
             //printf("wait receive\n");
             n = recvfrom(sockfd, packetbuffer, 68,
@@ -185,14 +198,14 @@ int main(int argc, char **argv) {
     skippedframes = 0;
     snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle, recvbuffer, (recv_ptr - recvbuffer) / FRAME_SIZE);
     recv_ptr = recvbuffer;
-    printf("PREFILLED FRAMES: %i\n", preframes);
+    printf("%i PREFILLED FRAMES: %i\n", k, preframes);
     if (preframes != 256) {
         printf("OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOoY\n");
         exit(1);
         }
     }
-    printf("sleeping 5");
-    sleep(5);
+    //printf("sleeping 5");
+    //sleep(5);
 
     //TODO: fill the buffer
 
@@ -202,7 +215,7 @@ int main(int argc, char **argv) {
     int i = 0;
 
     uint8_t* play_ptr;
-    while (false) {
+    while (true) {
         if (i <= 0) {
             // TODO: get sample
             blocksize = recv_ptr - recvbuffer;
