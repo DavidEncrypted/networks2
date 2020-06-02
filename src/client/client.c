@@ -67,12 +67,16 @@ int main(int argc, char **argv) {
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
     servaddr.sin_addr.s_addr = INADDR_ANY;
-
+    //inet_pton(AF_INET, "127.0.0.1", &(servaddr.sin_addr));
     int n;
     socklen_t len;
 
 
+    char serv_sin_str[124];
+    // now get it back and print it
+    inet_ntop(AF_INET, &(servaddr.sin_addr), serv_sin_str, INET_ADDRSTRLEN);
 
+    printf(" Clientaddr: %s\n", serv_sin_str); // prints "192.0.2.33"
 
 
     sendto(sockfd, (const char *)hello, strlen(hello),
@@ -80,7 +84,11 @@ int main(int argc, char **argv) {
             sizeof(servaddr));
     printf("Setup message sent.\n");
 
+    char setserv_sin_str[124];
+    // now get it back and print it
+    inet_ntop(AF_INET, &(servaddr.sin_addr), setserv_sin_str, INET_ADDRSTRLEN);
 
+    printf(" Clientaddr: %s\n", setserv_sin_str); // prints "192.0.2.33"
 
     n = recvfrom(sockfd, (char *)buffer, MAXLINE,
                 MSG_WAITALL, (struct sockaddr *) &servaddr,
@@ -144,6 +152,12 @@ int main(int argc, char **argv) {
                         MSG_WAITALL, (struct sockaddr *) &servaddr,
                         &len);
             //printf("frame size: %i\n", n);
+
+            char recvserv_sin_str[124];
+            // now get it back and print it
+            inet_ntop(AF_INET, &(servaddr.sin_addr), recvserv_sin_str, INET_ADDRSTRLEN);
+
+            printf("recv Clientaddr: %s\n", recvserv_sin_str); // prints "192.0.2.33"
 
             if (n < 0) {
                 printf("FUCKING FAILED, n= %i\n", n);

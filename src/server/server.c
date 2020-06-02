@@ -195,14 +195,21 @@ int main(int argc, char **argv) {
     buffer[n] = '\0';
     printf("Client : %s\n", buffer);
 
+    char sin_str[124];
+    // now get it back and print it
+    inet_ntop(AF_INET, &(cliaddr.sin_addr), sin_str, INET_ADDRSTRLEN);
 
+    printf(" Clientaddr: %s\n", sin_str); // prints "192.0.2.33"
 
     sendto(sockfd, (const char *)hello, strlen(hello),
         MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
             len);
     printf("ACK message sent.\n");
-
+    char postsin_str[124];
     //fcntl(sockfd, F_SETFL, O_NONBLOCK);
+    inet_ntop(AF_INET, &(cliaddr.sin_addr), postsin_str, INET_ADDRSTRLEN);
+
+    printf("post hello Clientaddr: %s\n", postsin_str); // prints "192.0.2.33"
 
 
     // Sending data
@@ -326,7 +333,13 @@ int main(int argc, char **argv) {
         err = sendto(sockfd, packetbuffer, (samplesperpacket * samplesize) + sizeof(currentsample),
             MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
                 len);
+        char sendsin_str[124];
+        // now get it back and print it
+        inet_ntop(AF_INET, &(cliaddr.sin_addr), sendsin_str, INET_ADDRSTRLEN);
 
+        printf("sendloop Clientaddr: %s\n", sendsin_str); // prints "192.0.2.33"
+
+        //printf("sendloop Clientaddr: %s", inet_ntoa(cliaddr));
         if (err < 0){
             if (err == EWOULDBLOCK){
                 printf("WOULD BLOCK ERROR");
