@@ -156,7 +156,10 @@ int main(int argc, char **argv) {
     servaddr.sin_family    = AF_INET; // IPv4
     servaddr.sin_addr.s_addr = INADDR_ANY;
     servaddr.sin_port = htons(PORT);
-    inet_pton(AF_INET, "127.0.0.1", &(servaddr.sin_addr));
+
+    //cliaddr.sin_family = AF_INET; // IPv4
+    //cliaddr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "192.168.178.163", &(cliaddr.sin_addr));
 
     // Bind the socket with the server address
     if ( bind(sockfd, (const struct sockaddr *)&servaddr,
@@ -169,7 +172,12 @@ int main(int argc, char **argv) {
     int n;
     socklen_t len = sizeof(cliaddr);  //len is value/resuslt
 
-
+    if (connect (sockfd, (const struct sockaddr *)&cliaddr,
+            sizeof(cliaddr))){
+              perror("connect");
+              close(sockfd);
+              exit(1);
+            }
 
     fd_set rfds;
 
@@ -195,6 +203,13 @@ int main(int argc, char **argv) {
                 &len);
     buffer[n] = '\0';
     printf("Client : %s\n", buffer);
+
+    if (connect (sockfd, (const struct sockaddr *)&cliaddr,
+            sizeof(cliaddr))){
+              perror("connect");
+              close(sockfd);
+              exit(1);
+            }
 
     char sin_str[124];
     // now get it back and print it
