@@ -204,8 +204,7 @@ int main(int argc, char **argv) {
     buffer[n] = '\0';
     printf("Client : %s\n", buffer);
 
-    if (connect (sockfd, (const struct sockaddr *)&cliaddr,
-            sizeof(cliaddr))){
+              sizeof(cliaddr))){
               perror("connect");
               close(sockfd);
               exit(1);

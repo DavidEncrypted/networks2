@@ -38,6 +38,10 @@ S -> C: ASP/0.1 200 OK
         server_ip: 127.0.0.2
         server_port: 543
 
+numsamples
+bits per samples
+
+
 
 PLAY
 The client asks the server to start the stream of the audio file. This can only
