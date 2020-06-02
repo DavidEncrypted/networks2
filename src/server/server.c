@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <alsa/asoundlib.h>
 
 #include "../communication/asp/asp.h"
 
@@ -117,9 +118,8 @@ static void close_wave_file(struct wave_file *wf) {
 }
 
 
-#define DATA "Danger Will Roger . . ."
-#define TRUE 1
-#define SERVER_PORT 5001
+#define PORT 5001
+#define MAXLINE 1024
 #define BUFFER_SIZE 1024
 
 
@@ -130,71 +130,229 @@ void pdie(const char *);
 
 int main(int argc, char **argv) {
 
-  int sock;   /* fd for main socket */
-  int msgsock;   /* fd from accept return */
-  struct sockaddr_in server;   /* socket struct for server connection */
-  struct sockaddr_in client;   /* socket struct for client connection */
-  int clientLen;   /* returned length of client from accept() */
-  int rval;   /* return value from read() */
-  char buf[BUFFER_SIZE];   /* receive buffer */
+    // TODO: Parse command-line options
+    char *filename = "tubthumping.wav";
 
-  /* Open a socket, not bound yet.  Type is Internet TCP. */
-  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-  pdie("Opening stream socket");
-
-  /*
-  Prepare to bind.  Permit Internet connections from any client
-  to our SERVER_PORT.
-  */
-  bzero((char *) &server, sizeof(server));
-  server.sin_family = AF_INET;
-  server.sin_addr.s_addr = INADDR_ANY;
-  server.sin_port = htons(SERVER_PORT);
-  if (bind(sock, (struct sockaddr *) &server, sizeof(server)))
-  pdie("Binding stream socket");
-
-  printf("Socket has port %hu\n", ntohs(server.sin_port));
-
-  listen(s, 5);
+    // Open the WAVE file
+    if (open_wave_file(&wf, filename) < 0)
+        return -1;
 
 
-  /* Loop, waiting for client connections. */
-  /* This is an interactive server. */
-  while (TRUE) {
+    int sockfd;
+    char buffer[MAXLINE];
+    char *hello = "Setup ACK, Session: 1";
+    struct sockaddr_in servaddr, cliaddr;
 
-    clientLen = sizeof(client);
-    if ((msgsock = accept(sock, (struct sockaddr *) &client,
-                          &clientLen)) == -1)
-       pdie("Accept");
-    else {
-       /* Print information about the client. */
-       if (clientLen != sizeof(client))
-          pdie("Accept overwrote sockaddr structure.");
+    // Creating socket file descriptor
+    if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
+        perror("socket creation failed");
+        exit(EXIT_FAILURE);
+    }
 
-       printf("Client IP: %s\n", inet_ntoa(client.sin_addr));
-       printf("Client Port: %hu\n", ntohs(client.sin_port));
+    memset(&servaddr, 0, sizeof(servaddr));
+    memset(&cliaddr, 0, sizeof(cliaddr));
 
-       do {   /* Read from client until it's closed the connection. */
-          /* Prepare read buffer and read. */
-          bzero(buf, sizeof(buf));
-          if ((rval = read(msgsock, buf, BUFFER_SIZE)) < 0)
-             pdie("Reading stream message");
+    // Filling server information
+    servaddr.sin_family    = AF_INET; // IPv4
+    servaddr.sin_addr.s_addr = INADDR_ANY;
+    servaddr.sin_port = htons(PORT);
 
-          if (rval == 0)   /* Client has closed the connection */
-             fprintf(stderr, "Ending connection\n");
-          else
-             printf("S: %s\n", buf);
+    // Bind the socket with the server address
+    if ( bind(sockfd, (const struct sockaddr *)&servaddr,
+            sizeof(servaddr)) < 0 )
+    {
+        perror("bind failed");
+        exit(EXIT_FAILURE);
+    }
 
-          /* Write back to client. */
-          if (write(msgsock, DATA, sizeof(DATA)) < 0)
-             pdie("Writing on stream socket");
+    int n;
+    socklen_t len = sizeof(cliaddr);  //len is value/resuslt
 
-       } while (rval != 0);
-    }   /* else */
 
-    close(msgsock);
-  }
 
+    fd_set rfds;
+
+    FD_ZERO(&rfds);
+    FD_SET(sockfd, &rfds);
+
+    struct timeval tv;
+
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+
+    // int preretval = select(sockfd + 1, &rfds, NULL, NULL, &tv);
+    // if (preretval < 0){
+    //     printf("preretval < 0");
+    //     return 0;
+    // }
+    // if (FD_ISSET(sockfd, &rfds)) {
+    //     printf("SOCKET READABLE\n");
+    // }
+
+    n = recvfrom(sockfd, (char *)buffer, MAXLINE,
+                MSG_WAITALL, ( struct sockaddr *) &cliaddr,
+                &len);
+    buffer[n] = '\0';
+    printf("Client : %s\n", buffer);
+
+
+
+    sendto(sockfd, (const char *)hello, strlen(hello),
+        MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
+            len);
+    printf("ACK message sent.\n");
+
+    //fcntl(sockfd, F_SETFL, O_NONBLOCK);
+
+
+    // Sending data
+
+    fprintf(stdout, "sample with bitsize %d\n",
+                    wf.wh->w_bits_per_sample);
+    fprintf(stdout, "samples per sec %d\n",
+                    wf.wh->n_samples_per_sec);
+
+    fprintf(stdout, "n channels %d\n",
+                    wf.wh->n_channels);
+
+    uint32_t numbersamples = (int) wf.payload_size / (wf.wh->n_channels * wf.wh->w_bits_per_sample / 8);
+
+    fprintf(stdout, "n samples %i\n",
+                    numbersamples);
+
+    uint32_t samplesize = (wf.wh->w_bits_per_sample / 8) * wf.wh->n_channels;
+    fprintf(stdout, "samplesize: %i\n",
+                    samplesize);
+    uint32_t currentsample = 0;
+    uint8_t* currentp = wf.samples;
+
+    const int samplesperpacket = 16;
+
+    uint8_t* packetbuffer = malloc((samplesperpacket * samplesize) + sizeof(currentsample));
+
+    // uint32_t datamax = 100000;
+    // uint32_t currentdata = 0;
+    //while (currentdata < datamax){
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------
+
+// #define NUM_CHANNELS 2
+// #define SAMPLE_RATE 44100
+// #define BLOCK_SIZE 1024
+// // 1 Frame = Stereo 16 bit = 32 bit = 4kbit
+// #define FRAME_SIZE 4
+//
+//
+//
+// snd_pcm_t *snd_handle;
+//
+// int err = snd_pcm_open(&snd_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+//
+// if (err < 0) {
+//     fprintf(stderr, "couldnt open audio device: %s\n", snd_strerror(err));
+//     return -1;
+// }
+//
+// // Configure parameters of PCM output
+// err = snd_pcm_set_params(snd_handle,
+//                          SND_PCM_FORMAT_S16_LE,
+//                          SND_PCM_ACCESS_RW_INTERLEAVED,
+//                          NUM_CHANNELS,
+//                          SAMPLE_RATE,
+//                          0,              // Allow software resampling
+//                          500000);        // 0.5 seconds latency
+// if (err < 0) {
+//     printf("couldnt configure audio device: %s\n", snd_strerror(err));
+//     return -1;
+// }
+//
+//
+//
+//
+
+
+
+// ------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+    while (currentsample < numbersamples){
+
+        memcpy(packetbuffer, &currentsample, sizeof(currentsample));
+        //uint32_t i32 = packetbuffer[0] | (packetbuffer[1] << 8) | (packetbuffer[2] << 16) | (packetbuffer[3] << 24);
+        //printf("packetbuf: %u, %u\n", packetbuffer[0], packetbuffer[1]);
+        //printf("packeti32: %u\n", i32);
+
+        //memcpy(packetbuffer + 4, &currentdata, sizeof(currentdata));
+
+        //printf("sending currentsample: %u, currentdata, %u\n", currentsample, currentdata);
+        //currentdata++;
+
+
+        memcpy(packetbuffer + sizeof(currentsample), currentp, (samplesperpacket * samplesize));
+
+
+        //snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle, packetbuffer + sizeof(currentsample), (samplesperpacket * samplesize) / FRAME_SIZE);
+
+        int err;
+        // FD_ZERO(&rfds);
+        // FD_SET(sockfd, &rfds);
+        // printf("select\n");
+        // int retval = select(sockfd + 1, &rfds, NULL, NULL, &tv);
+        // printf("retval: %i", retval);
+        // if (retval < 0){
+        //     printf("retval < 0");
+        //     return 0;
+        // }
+        // if (FD_ISSET(sockfd, &rfds)) {
+        //     printf("SOCKET READABLE\n");
+        //
+
+
+
+        err = sendto(sockfd, packetbuffer, (samplesperpacket * samplesize) + sizeof(currentsample),
+            MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
+                len);
+
+        if (err < 0){
+            if (err == EWOULDBLOCK){
+                printf("WOULD BLOCK ERROR");
+            }
+            else {
+                printf("SENDTO ERROR : %i", err);
+            }
+        }
+        // }
+        // sendto(sockfd, tempdatabuffer, 8,
+        //     MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
+        //         len);
+
+        currentp += (samplesperpacket * samplesize);
+        currentsample += samplesperpacket;
+
+
+
+
+        //currentdata++;
+        //printf("currentp: %u\n", currentp - wf.samples);
+
+        if (currentsample % 10000 == 0){
+            printf("Sample: %i / %i\n", currentsample, numbersamples);
+        }
+    }
 
 
 
@@ -211,9 +369,6 @@ int main(int argc, char **argv) {
   //   printf("Received packet from %s:%d\nData: %s\n\n",
   //   inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port), buf);
   // }
-
-
-  close(s);
 
 
   // TODO: Read and send audio data

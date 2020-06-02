@@ -27,10 +27,8 @@
 
 
 
-#define DATA "The sea is calm tonight, the tide is full . . ."
-#define SERVER_PORT 5001
-#define BUFFER_SIZE 1024
-
+#define PORT 5001
+#define MAXLINE 2048
 
 /* prototypes */
 void die(const char *);
@@ -46,65 +44,55 @@ void pdie(const char *);
 
 int main(int argc, char **argv) {
 
+    unsigned blocksize = 0;
 
-  int sock;   /* fd for socket connection */
-  struct sockaddr_in server;   /* Socket info. for server */
-  struct sockaddr_in client;   /* Socket info. about us */
-  int clientLen;   /* Length of client socket struct. */
-  struct hostent *hp;   /* Return value from gethostbyname() */
-  char buf[BUFFER_SIZE];   /* Received data buffer */
-  int i;   /* loop counter */
 
-  if (argc != 2)
-    die("Usage: client hostname");
 
-  /* Open 3 sockets and send same message each time. */
 
-  for (i = 0; i < 3; ++i)
-  {
-    /* Open a socket --- not bound yet. */
-    /* Internet TCP type. */
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-       pdie("Opening stream socket");
 
-    /* Prepare to connect to server. */
-    bzero((char *) &server, sizeof(server));
-    server.sin_family = AF_INET;
-    if ((hp = gethostbyname(argv[1])) == NULL) {
-       sprintf(buf, "%s: unknown host\n", argv[1]);
-       die(buf);
+    int sockfd;
+    char buffer[MAXLINE];
+    char *hello = "Setup Tubthumping";
+    struct sockaddr_in     servaddr;
+
+    // Creating socket file descriptor
+    if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
+        perror("socket creation failed");
+        exit(EXIT_FAILURE);
     }
-    bcopy(hp->h_addr, &server.sin_addr, hp->h_length);
-    server.sin_port = htons((u_short) SERVER_PORT);
 
-    /* Try to connect */
-    if (connect(sock, (struct sockaddr *) &server, sizeof(server)) < 0)
-       pdie("Connecting stream socket");
+    memset(&servaddr, 0, sizeof(servaddr));
 
-    /* Determine what port client's using. */
-    clientLen = sizeof(client);
-    if (getsockname(sock, (struct sockaddr *) &client, &clientLen))
-       pdie("Getting socket name");
+    // Filling server information
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(PORT);
+    servaddr.sin_addr.s_addr = INADDR_ANY;
 
-    if (clientLen != sizeof(client))
-       die("getsockname() overwrote name structure");
+    int n;
+    socklen_t len;
 
-    printf("Client socket has port %hu\n", ntohs(client.sin_port));
 
-    /* Write out message. */
-    if (write(sock, DATA, sizeof(DATA)) < 0)
-       pdie("Writing on stream socket");
 
-    /* Prepare our buffer for a read and then read. */
-    bzero(buf, sizeof(buf));
-    if (read(sock, buf, BUFFER_SIZE) < 0)
-       pdie("Reading stream message");
 
-    printf("C: %s\n", buf);
 
-    /* Close this connection. */
-    close(sock);
-  }
+    sendto(sockfd, (const char *)hello, strlen(hello),
+        MSG_CONFIRM, (const struct sockaddr *) &servaddr,
+            sizeof(servaddr));
+    printf("Setup message sent.\n");
+
+
+
+    n = recvfrom(sockfd, (char *)buffer, MAXLINE,
+                MSG_WAITALL, (struct sockaddr *) &servaddr,
+                &len);
+    buffer[n] = '\0';
+    printf("Server : %s\n", buffer);
+
+
+
+
+
+
 
 
 
@@ -139,29 +127,94 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    uint8_t* packetbuffer = malloc(MAXLINE);
+    uint32_t frame_n;
+    uint32_t prev_frame_n;
     // set up buffers/queues
     uint8_t* recvbuffer = malloc(BLOCK_SIZE);
     uint8_t* playbuffer = malloc(BLOCK_SIZE);
+    uint8_t* recv_ptr = recvbuffer;
 
+    int skippedframes = 0;
+
+    for (int k = 0; k < 4000; k++){
+        do {
+            //printf("wait receive\n");
+            n = recvfrom(sockfd, packetbuffer, 68,
+                        MSG_WAITALL, (struct sockaddr *) &servaddr,
+                        &len);
+            //printf("frame size: %i\n", n);
+
+            if (n < 0) {
+                printf("FUCKING FAILED, n= %i\n", n);
+                continue;
+                //exit(EXIT_FAILURE);
+            }
+            //if (n != 8) {printf("EXCUSEME"); exit(EXIT_FAILURE);}
+            //uint32_t frame_n = *(packetbuffer);
+
+            frame_n = packetbuffer[0] | (packetbuffer[1] << 8) | (packetbuffer[2] << 16) | (packetbuffer[3] << 24);
+            if (frame_n != prev_frame_n + 16) {
+                skippedframes += frame_n - (prev_frame_n);
+                //printf("Frame skipped/out of order: prev: %u, current: %u\n", prev_frame_n, frame_n);
+            }
+            //printf("Framenum: %u\n", frame_n);
+            memcpy(recv_ptr, packetbuffer + 4, n - 4);
+            //blocksize += n;
+            recv_ptr += n - 4;
+
+            prev_frame_n = frame_n;
+
+            //printf("recv_ptr - recvbuffer : %li\n", recv_ptr - recvbuffer);
+        } while (recv_ptr - recvbuffer < BLOCK_SIZE); // 256 samples   44100 / s
+    printf(" frames skipped per 256 samples: %i\n", skippedframes);
+    skippedframes = 0;
+    snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle, recvbuffer, (recv_ptr - recvbuffer) / FRAME_SIZE);
+    recv_ptr = recvbuffer;
+    printf("PREFILLED FRAMES: %i\n", preframes);
+    if (preframes != 256) {printf("OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOoY\n");
+        exit(1);
+
+        }
+    }
     //TODO: fill the buffer
 
     // Play
     printf("playing...\n");
 
     int i = 0;
-    uint8_t* recv_ptr = recvbuffer;
+
     uint8_t* play_ptr;
-    while (true) {
+    while (false) {
         if (i <= 0) {
             // TODO: get sample
+            blocksize = recv_ptr - recvbuffer;
+            memcpy(playbuffer, recvbuffer, blocksize);
+            recv_ptr = recvbuffer;
 
             play_ptr = playbuffer;
             i = blocksize;
         }
-
+        printf("start write to ALSA");
         // write frames to ALSA
-        snd_pcm_sframes_t frames = snd_pcm_writei(snd_handle, play_ptr, (blocksize - (*play_ptr - *playbuffer)) / FRAME_SIZE);
 
+        snd_pcm_sframes_t frames;
+        if (true){
+            frames = snd_pcm_writei(snd_handle, play_ptr, (blocksize - (*play_ptr - *playbuffer)) / FRAME_SIZE);
+        }
+        else {
+            frames = blocksize / FRAME_SIZE;
+            printf("fake frames: %i\n", frames);
+            for (int x = 0; x < (blocksize - (*play_ptr - *playbuffer)); x += 4){
+                uint32_t datanum = play_ptr[x] | (play_ptr[x+1] << 8) | (play_ptr[x+2] << 16) | (play_ptr[x+3] << 24);
+                printf("datanum: %u\n", datanum);
+            }
+        }
+
+        printf("Write expected %i : %li\n", (blocksize - (*play_ptr - *playbuffer)) / FRAME_SIZE, frames);
+
+        printf("snd_pcm_avail %d \n", snd_pcm_avail(snd_handle));
+        printf("snd_pcm_status_get_avail %d \n", snd_pcm_status_get_avail(snd_handle));
         // Check for errors
         int ret = 0;
         if (frames < 0)
@@ -185,7 +238,35 @@ int main(int argc, char **argv) {
 
         // TODO: try to receive a block from the server?
 
+        do {
+            n = recvfrom(sockfd, packetbuffer, MAXLINE,
+                        MSG_WAITALL, (struct sockaddr *) &servaddr,
+                        &len);
+            //printf("frame size: %i\n", n);
+            if (n < 0) {
+                printf("FUCKING FAILED, n= %i", n);
+                exit(EXIT_FAILURE);
+            }
+            //uint32_t frame_n = *(packetbuffer);
+
+
+
+
+
+
+
+            frame_n = packetbuffer[0] | (packetbuffer[1] << 8) | (packetbuffer[2] << 16) | (packetbuffer[3] << 24);
+            //printf("Framenum: %u\n", frame_n);
+            memcpy(recv_ptr, packetbuffer+4, n - 4);
+            //blocksize += n;
+            recv_ptr += n - 4;
+            //printf("recv_ptr - recvbuffer : %li\n", recv_ptr - recvbuffer);
+        } while (recv_ptr - recvbuffer < BLOCK_SIZE);
+
     }
+    //err = wait_for_poll(snd_handle, ufds, count);
+    printf("start 5 sec sleep");
+    sleep(5);
 
     // clean up
     free(recvbuffer);
@@ -195,5 +276,30 @@ int main(int argc, char **argv) {
     snd_pcm_hw_free(snd_handle);
     snd_pcm_close(snd_handle);
 
+    close(sockfd);
+
     return 0;
+}
+
+
+/**********************************************************************
+ * pdie --- Call perror() to figure out what's going on and die.
+ **********************************************************************/
+
+void pdie(const char *mesg) {
+
+   perror(mesg);
+   exit(1);
+}
+
+
+/**********************************************************************
+ * die --- Print a message and die.
+ **********************************************************************/
+
+void die(const char *mesg) {
+
+   fputs(mesg, stderr);
+   fputc('\n', stderr);
+   exit(1);
 }
