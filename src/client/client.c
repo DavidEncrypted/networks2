@@ -27,7 +27,7 @@
 
 
 
-#define PORT 5001
+#define PORT 1235
 #define MAXLINE 2048
 
 /* prototypes */
@@ -90,11 +90,11 @@ int main(int argc, char **argv) {
 
     printf(" Clientaddr: %s\n", setserv_sin_str); // prints "192.0.2.33"
 
-    n = recvfrom(sockfd, (char *)buffer, MAXLINE,
-                MSG_WAITALL, (struct sockaddr *) &servaddr,
-                &len);
-    buffer[n] = '\0';
-    printf("Server : %s\n", buffer);
+    // n = recvfrom(sockfd, (char *)buffer, MAXLINE,
+    //             MSG_WAITALL, (struct sockaddr *) &servaddr,
+    //             &len);
+    // buffer[n] = '\0';
+    // printf("Server : %s\n", buffer);
 
 
 
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
 
     int skippedframes = 0;
 
-    for (int k = 0; k < 4000; k++){
+    for (int k = 0; k < 40; k++){
         do {
             //printf("wait receive\n");
             n = recvfrom(sockfd, packetbuffer, 68,
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
             // now get it back and print it
             inet_ntop(AF_INET, &(servaddr.sin_addr), recvserv_sin_str, INET_ADDRSTRLEN);
 
-            printf("recv Clientaddr: %s\n", recvserv_sin_str); // prints "192.0.2.33"
+            //printf("recv Clientaddr: %s\n", recvserv_sin_str); // prints "192.0.2.33"
 
             if (n < 0) {
                 printf("FUCKING FAILED, n= %i\n", n);
@@ -186,11 +186,14 @@ int main(int argc, char **argv) {
     snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle, recvbuffer, (recv_ptr - recvbuffer) / FRAME_SIZE);
     recv_ptr = recvbuffer;
     printf("PREFILLED FRAMES: %i\n", preframes);
-    if (preframes != 256) {printf("OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOoY\n");
+    if (preframes != 256) {
+        printf("OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOoY\n");
         exit(1);
-
         }
     }
+    printf("sleeping 5");
+    sleep(5);
+
     //TODO: fill the buffer
 
     // Play

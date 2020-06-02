@@ -118,7 +118,7 @@ static void close_wave_file(struct wave_file *wf) {
 }
 
 
-#define PORT 5001
+#define PORT 1235
 #define MAXLINE 1024
 #define BUFFER_SIZE 1024
 
@@ -202,15 +202,15 @@ int main(int argc, char **argv) {
 
     printf(" Clientaddr: %s\n", sin_str); // prints "192.0.2.33"
 
-    sendto(sockfd, (const char *)hello, strlen(hello),
-        MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
-            len);
-    printf("ACK message sent.\n");
-    char postsin_str[124];
-    //fcntl(sockfd, F_SETFL, O_NONBLOCK);
-    inet_ntop(AF_INET, &(cliaddr.sin_addr), postsin_str, INET_ADDRSTRLEN);
-
-    printf("post hello Clientaddr: %s\n", postsin_str); // prints "192.0.2.33"
+    // sendto(sockfd, (const char *)hello, strlen(hello),
+    //     MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
+    //         len);
+    // printf("ACK message sent.\n");
+    // char postsin_str[124];
+    // //fcntl(sockfd, F_SETFL, O_NONBLOCK);
+    // inet_ntop(AF_INET, &(cliaddr.sin_addr), postsin_str, INET_ADDRSTRLEN);
+    //
+    // printf("post hello Clientaddr: %s\n", postsin_str); // prints "192.0.2.33"
 
 
     // Sending data
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
         // now get it back and print it
         inet_ntop(AF_INET, &(cliaddr.sin_addr), sendsin_str, INET_ADDRSTRLEN);
 
-        printf("sendloop Clientaddr: %s\n", sendsin_str); // prints "192.0.2.33"
+        //printf("sendloop Clientaddr: %s\n", sendsin_str); // prints "192.0.2.33"
 
         //printf("sendloop Clientaddr: %s", inet_ntoa(cliaddr));
         if (err < 0){
