@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
     servaddr.sin_addr.s_addr = INADDR_ANY;
-    //inet_pton(AF_INET, "127.0.0.1", &(servaddr.sin_addr));
+    inet_pton(AF_INET, "127.0.0.1", &(servaddr.sin_addr));
     int n;
     socklen_t len;
 
