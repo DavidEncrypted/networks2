@@ -14,7 +14,7 @@
 
 #include <alsa/asoundlib.h>
 
-//#include "../communication/asp/asp.h"
+#include "../communication/asp/asp.h"
 
 #define BIND_PORT 1235
 
@@ -28,7 +28,11 @@
 #define SAMPLE_RATE 44100
 #define BLOCK_SIZE 1024
 
+#define MAX_PACKET_SIZE 256
+
 pthread_mutex_t lock;
+
+static int sockfd = -1;
 
 // Prototypes
 int setup_socket(struct sockaddr_in *p_servaddr, struct sockaddr_in *p_cliaddr);
@@ -69,7 +73,14 @@ void *liveplaybuffer(void *args){
       printf("couldnt configure audio device: %s\n", snd_strerror(err));
       return NULL;
   }
-
+  uint32_t pollsampleset = 0;
+  // Wait for buffer to fill to minimum level
+  while (pollsampleset < 4096){
+    pthread_mutex_lock(&lock);
+    pollsampleset = *(lastsampleset);
+    pthread_mutex_unlock(&lock);
+  }
+  printf("Minimum play buffer full! START PLAYING\n");
   // Total buffer size: totalsamples * 4
   // pbuf + 1024 = 256 samples
   uint8_t* pbuf = samplebuffer;
@@ -80,7 +91,7 @@ void *liveplaybuffer(void *args){
 
   do {
     pthread_mutex_lock(&lock);
-    uint32_t pollsampleset = *(lastsampleset);
+    pollsampleset = *(lastsampleset);
     pthread_mutex_unlock(&lock);
 
     if (samplesuploaded + 256 < pollsampleset){
@@ -89,8 +100,8 @@ void *liveplaybuffer(void *args){
       //printf("frames uploaded to audio player: %li\n", preframes);
       pbuf += preframes * 4;
       samplesuploaded += preframes;
-      if (samplesuploaded % 256 * 10 == 0)
-        printf("samplesuploaded: %u\n", samplesuploaded);
+      //if (samplesuploaded % 256 * 1000 == 0)
+        //printf("samplesuploaded: %u\n", samplesuploaded);
     }
     else if (pollsampleset + 1 == *(totalsamples)){
       snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle,
@@ -102,7 +113,7 @@ void *liveplaybuffer(void *args){
         done = 1;
         printf("samplesuploaded: %u\n", samplesuploaded);
         printf("totalsamples: %u\n", *(totalsamples));
-        printf("FINISHED PLAYING");
+        printf("FINISHED PLAYING\n");
       }
     }
 
@@ -150,15 +161,15 @@ int main(){
 
   struct sockaddr_in servaddr, cliaddr;
 
-  int sockfd = setup_socket(&servaddr, &cliaddr);
+  sockfd = setup_socket(&servaddr, &cliaddr);
 
   int server_addr_len = sizeof(servaddr);
 
   send_startup(sockfd, (const struct sockaddr *) &servaddr, server_addr_len);
 
-
-  uint8_t *recvbuffer = malloc(128);
-  uint8_t *sendbuffer = malloc(128);
+  struct s_packet *packet = malloc(MAX_PACKET_SIZE);
+  //uint8_t *recvbuffer = malloc(128);
+  uint8_t *sendbuffer = malloc(MAX_PACKET_SIZE);
 
   uint32_t num = 0;
 
@@ -187,7 +198,7 @@ int main(){
     if (FD_ISSET(sockfd, &readfds))
     {
       printf("recieving...\n");
-      int fn = recvfrom(sockfd, recvbuffer, 128,
+      int fn = recvfrom(sockfd, packet, 256,
              MSG_WAITALL, (struct sockaddr *) &servaddr,
              &len);
       if (fn <= 0){
@@ -195,12 +206,9 @@ int main(){
         exit(-1);
       }
       else if (fn >= 8){
-        number_samples = recvbuffer[0] | (recvbuffer[1] << 8) |
-                              (recvbuffer[2] << 16) | (recvbuffer[3] << 24);
-        firstlocnum = recvbuffer[4] | (recvbuffer[5] << 8) |
-                              (recvbuffer[6] << 16) | (recvbuffer[7] << 24);
+        number_samples = packet->num_samples;
         printf("First recv size: %i\n", fn);
-        printf("First recv num, samples: %u, %u\n", firstlocnum, number_samples);
+        printf("First recv num, samples: %u, %u\n", packet->sample_number, number_samples);
 
         firstrecieve = 1;
 
@@ -217,15 +225,11 @@ int main(){
   uint8_t *fullsamplebuffer = malloc(number_samples*SAMPLE_SIZE);
   memset(fullsamplebuffer, 0, number_samples);
   // Copying first data into it
-  memcpy(fullsamplebuffer+(firstlocnum*SAMPLE_SIZE), recvbuffer+10, 4);
+  memcpy(fullsamplebuffer+(packet->sample_number*SAMPLE_SIZE), packet->data, packet->data_bytes);
   printf("Correct first data: %u\n", fullsamplebuffer[0]);
   // Allocating full data recieved bitmap
-  // uint8_t* fulldatabitmap = malloc(number_samples/8);
-  // memset(fulldatabitmap, 0, number_samples/8);
-
 
   uint32_t lastsampleset = 0;
-
 
   // Setup multithreading
   if (pthread_mutex_init(&lock, NULL) != 0)
@@ -234,9 +238,6 @@ int main(){
         perror("mutex");
         return 1;
     }
-
-
-
   struct threadargs *t_args = (struct threadargs *)malloc(sizeof(struct threadargs));
 
   t_args->p_lastsampleset = &lastsampleset;
@@ -249,21 +250,24 @@ int main(){
             printf("\ncan't create thread :[%s]", strerror(pthreaderr));
 
 
-
-
   printf("POST SETUP\n");
 
   // Start recieving all data;
-  uint32_t nullbytes = 0;
-  uint32_t prevnum = -1;
+  uint32_t totalbytesrecieved = 0;
+  uint32_t prevnum = 0;
   bool recieving = true;
 
+  uint32_t locnum = 0;
 
-  uint32_t locnum;
+  // Quality check variables
+  uint32_t last_check_num = 0;
+  int last_check_num_bytes_dropped = 0;
+  uint32_t highest_sample_number = 0;
+
   printf("start RECIEVE\n");
   int n;
   do {
-    n = recvfrom(sockfd, recvbuffer, 128,
+    n = recvfrom(sockfd, packet, 256,
                 MSG_WAITALL, (struct sockaddr *) &servaddr,
                 &len);
     if (n <= 0){
@@ -271,64 +275,70 @@ int main(){
       printf("probably disconnected end loop\n");
       break;
     }
-    if (n == 1){
+    if (n == 4){
       // Recieved finish packet
-      if (*(recvbuffer) == 1){
+      if (packet->num_samples == 1){
         // Success
         printf("Recieved finish packet\n");
         recieving = false;
         break;
       }
       else {
-        printf("Error: 1 byte recieved -> not 1\n");
+        printf("Error: 4 byte recieved -> not 1\n");
         exit(-1);
       }
     }
     else {
-      // | num_samples   | sample_number | data_bytes | databytes...
-      // | 4 bytes       | 4 bytes       | 2 bytes    | 4 bytes per sample
+      // | num_samples   | sample_number | data_bytes | quality_level | databytes...
+      // | 4 bytes       | 4 bytes       | 2 bytes    | 2 bytes       | 4 bytes per sample ...
 
-      locnum = recvbuffer[4] | (recvbuffer[5] << 8) |
-                            (recvbuffer[6] << 16) | (recvbuffer[7] << 24);
-
-      uint16_t data_bytes = recvbuffer[8] | (recvbuffer[9] << 8);
-      memcpy(fullsamplebuffer+(locnum*SAMPLE_SIZE), recvbuffer + 10, data_bytes);
+      memcpy(fullsamplebuffer+(packet->sample_number*SAMPLE_SIZE), packet->data, packet->data_bytes);
 
       // Get lock
       pthread_mutex_lock(&lock);
-      lastsampleset = locnum;
+      lastsampleset = packet->sample_number;
       pthread_mutex_unlock(&lock);
       // Release lock
 
-      for (int y = 0; y < (data_bytes / SAMPLE_SIZE); y++){
-        if (recvbuffer[10 + y] == 0) nullbytes++;
+
+      // Quality Check
+      if (packet->sample_number > highest_sample_number) highest_sample_number = packet->sample_number;
+
+      totalbytesrecieved += packet->data_bytes;
+
+      if (last_check_num + 1024 > packet->sample_number){
+          // Do quality check
+          uint32_t expected_bytes_recv = highest_sample_number * SAMPLE_SIZE;
+          int current_num_bytes_dropped = (int) expected_bytes_recv - totalbytesrecieved;
+          //printf("current num bytes dropped: %u\n", current_num_bytes_dropped);
+          //printf("last Num bytes dropped: %u\n", last_check_num_bytes_dropped);
+          if (current_num_bytes_dropped - last_check_num_bytes_dropped != 0)
+            printf("last 1024 bytes num dropped: %i\n", current_num_bytes_dropped - last_check_num_bytes_dropped);
+          last_check_num_bytes_dropped = current_num_bytes_dropped;
+          last_check_num = packet->sample_number;
       }
+
+
+      // for (int y = 0; y < (packet->data_bytes / SAMPLE_SIZE); y++){
+      //   if (recvbuffer[10 + y] == 0) nullbytes++;
+      // }
 
     }
   }while (recieving);
   printf("FINISHED\n");
 
   // Setting lastsampleset to final sample;
+
   pthread_mutex_lock(&lock);
-  lastsampleset = number_samples - 1;
+  if (lastsampleset != number_samples - 1)
+    lastsampleset = number_samples - 1;
   pthread_mutex_unlock(&lock);
 
-  printf("final num: %u\n", locnum);
-  printf("total samples: %u\n", number_samples);
-  //printf("Num dropped guess: %u * 4 = %u\n", numdropped, numdropped * 4);
-  int correct = 0;
-  int incorrect = 0;
-  for (int b = 0; b < number_samples * SAMPLE_SIZE; b++){
-    if (fullsamplebuffer[b] != 0){
-      correct++;
-      //printf("%u", fullsamplebuffer[b]);
-    }
-    else incorrect++;
-    //printf("%u", fullsamplebuffer[b]);
-  }
-  printf("c/i/t/n/c+n: %i, %i, %i, %i, %i\n", correct, incorrect,number_samples, nullbytes, correct + nullbytes);
-  printf("correct: %i\n", correct + nullbytes);
-  printf("incorrect: %i\n", incorrect - nullbytes);
+  //printf("final num: %u\n", locnum);
+  printf("Total samples: %u\n", number_samples);
+  printf("Total number of bytes dropped: %u\n", last_check_num_bytes_dropped);
+
+
 
 
   pthread_join(audiothread, NULL);
@@ -410,38 +420,38 @@ int send_startup(int sockfd, const struct sockaddr *server_addr, int p_server_ad
   return setuperr;
 }
 
-void playbuffer(uint8_t** playbuffer, uint32_t number_samples){
-
-  // Open audio device
-  snd_pcm_t *snd_handle;
-
-  int err = snd_pcm_open(&snd_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
-
-  if (err < 0) {
-      fprintf(stderr, "couldnt open audio device: %s\n", snd_strerror(err));
-      return;
-  }
-
-  // Configure parameters of PCM output
-  err = snd_pcm_set_params(snd_handle,
-                           SND_PCM_FORMAT_S16_LE,
-                           SND_PCM_ACCESS_RW_INTERLEAVED,
-                           NUM_CHANNELS,
-                           SAMPLE_RATE,
-                           0,              // Allow software resampling
-                           500000);        // 0.5 seconds latency
-  if (err < 0) {
-      printf("couldnt configure audio device: %s\n", snd_strerror(err));
-      return;
-  }
-
-  printf("SENDING FRAMES\n");
-  uint8_t* pbuf = *(playbuffer);
-  for (int i = 0; i < number_samples*4 ; i += 1024){
-    //printf("i: %i", i);
-    snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle,
-                    pbuf, 1024 / SAMPLE_SIZE);
-    pbuf += 1024;
-    //printf("preframes: %u", preframes);
-  }
-}
+// void playbuffer(uint8_t** playbuffer, uint32_t number_samples){
+//
+//   // Open audio device
+//   snd_pcm_t *snd_handle;
+//
+//   int err = snd_pcm_open(&snd_handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+//
+//   if (err < 0) {
+//       fprintf(stderr, "couldnt open audio device: %s\n", snd_strerror(err));
+//       return;
+//   }
+//
+//   // Configure parameters of PCM output
+//   err = snd_pcm_set_params(snd_handle,
+//                            SND_PCM_FORMAT_S16_LE,
+//                            SND_PCM_ACCESS_RW_INTERLEAVED,
+//                            NUM_CHANNELS,
+//                            SAMPLE_RATE,
+//                            0,              // Allow software resampling
+//                            500000);        // 0.5 seconds latency
+//   if (err < 0) {
+//       printf("couldnt configure audio device: %s\n", snd_strerror(err));
+//       return;
+//   }
+//
+//   printf("SENDING FRAMES\n");
+//   uint8_t* pbuf = *(playbuffer);
+//   for (int i = 0; i < number_samples*4 ; i += 1024){
+//     //printf("i: %i", i);
+//     snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle,
+//                     pbuf, 1024 / SAMPLE_SIZE);
+//     pbuf += 1024;
+//     //printf("preframes: %u", preframes);
+//   }
+// }

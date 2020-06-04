@@ -14,10 +14,12 @@
 
 #include <alsa/asoundlib.h>
 
+#include "../communication/asp/asp.h"
 
 
-static int asp_socket_fd = -1;
 
+//static int asp_socket_fd = -1;
+static int sockfd = -1;
 
 #define SERVERPORT 1234
 #define LOCALPORT 1235
@@ -26,8 +28,12 @@ static int asp_socket_fd = -1;
 
 #define SAMPLE_SIZE 4
 
+// worst -- good
+//   1   --  5
+#define CONNECTION_QUALITY 5
+
 int setup_socket(struct sockaddr_in *p_servaddr, struct sockaddr_in *p_cliaddr){
-  int sockfd;
+
   // Creating socket file descriptor
   if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
       perror("socket creation failed");
@@ -57,6 +63,14 @@ int setup_socket(struct sockaddr_in *p_servaddr, struct sockaddr_in *p_cliaddr){
   return sockfd;
 }
 
+int sim_sendto(int p_sockfd, struct s_packet *p_packet, int p_bytes_in_packet, const struct sockaddr * p_cliaddr, int p_len){
+
+    int err = sendto(p_sockfd, p_packet, p_bytes_in_packet,
+        MSG_CONFIRM, p_cliaddr,
+            p_len);
+
+    return err;
+}
 
 struct wave_header {
     char riff_id[4];
@@ -148,6 +162,8 @@ static void close_wave_file(struct wave_file *wf) {
     close(wf->fd);
 }
 
+
+
 int main(){
 
   // TODO: Parse command-line options
@@ -170,6 +186,10 @@ int main(){
   size_t recievelen;
 
 
+
+  //printf("size of packet alloc + 16: %lu\n", sizeof(*(packet)));
+
+
   printf("Start recieve wait\n");
   // Recieve client setup
   char* buffer = malloc(sizeof(char) * 128);
@@ -187,9 +207,16 @@ int main(){
 
   int samples_per_packet = 4;
   uint16_t data_bytes = samples_per_packet * SAMPLE_SIZE;
-  int bytes_in_packet = 4 + 4 + 2 + data_bytes; // 4 + 4 + 2 + 16 = 26
+  int bytes_in_packet = sizeof(struct s_packet) + data_bytes; // 4 + 4 + 2 + 2 + 16 = 28
   uint8_t* packetbuffer = malloc(bytes_in_packet);
   memset(packetbuffer, 0, bytes_in_packet);
+  const uint16_t quality = 1;
+
+  struct s_packet *packet;
+  printf("size of s_packet: %lu\n", sizeof(struct s_packet));
+  packet = malloc(bytes_in_packet);
+  memset(packet, 0, bytes_in_packet);
+
 
 
   // | num_samples   | sample_number | data_bytes | databytes...
@@ -199,19 +226,28 @@ int main(){
   //uint8_t k = 69;
   while (i < num_samples){
     // copy header into packet
-    memcpy(packetbuffer, &num_samples, sizeof(num_samples));
-    memcpy(packetbuffer + 4, &i, sizeof(i));
-    memcpy(packetbuffer + 8, &data_bytes, sizeof(data_bytes));
+    packet->num_samples = num_samples;
+    packet->sample_number = i;
+    packet->data_bytes = data_bytes;
+    packet->quality_level = quality;
 
+
+
+    // memcpy(packetbuffer, &num_samples, sizeof(num_samples));
+    // memcpy(packetbuffer + 4, &i, sizeof(i));
+    // memcpy(packetbuffer + 8, &data_bytes, sizeof(data_bytes));
+    //printf("samples: %u\n", *(packet));
     //copy data into packet
-    memcpy(packetbuffer + 10, currentp, data_bytes);
+    memcpy(packet->data, currentp, data_bytes);
     currentp += data_bytes;
 
     i += samples_per_packet;
 
-    int err = sendto(sockfd, packetbuffer, bytes_in_packet,
-        MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
-            len);
+    // int err = sendto(sockfd, packet, bytes_in_packet,
+    //     MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
+    //         len);
+    int err = sim_sendto(sockfd, packet, bytes_in_packet, (const struct sockaddr *) &cliaddr, len);
+
     if (err <= 0){
       printf("ERROR: %i\n", err);
     }
@@ -223,9 +259,9 @@ int main(){
 
   // DONE -----------------------
 
-  uint8_t finished = 1;
+  uint32_t finished = 1;
   memcpy(packetbuffer, &finished, 1);
-  int finerr = sendto(sockfd, packetbuffer, 1,
+  int finerr = sendto(sockfd, packetbuffer, 4,
       MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
           len);
   if (finerr <= 0){
