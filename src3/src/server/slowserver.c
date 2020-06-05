@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <getopt.h>
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -27,15 +28,17 @@ static int sockfd = -1;
 #define MAXLINE 1024
 #define BUFFER_SIZE 1024
 
+#define OPTSTR "f:"
+
 #define SAMPLE_SIZE 4
 
-// worst -- good
+// worst -- perfect
 //   1   --  5
-#define CONNECTION_QUALITY 5
+#define CONNECTION_QUALITY 2
 #define PACKET_DELAY_LENGTH 200000 // microseconds
 
 const int qualitydroplookup[5] = {30,60,80,90,100};
-const int qualitydelaylookup[5] = {400,200,50,10,0}; // i per 100000 sends get delay
+const int qualitydelaylookup[5] = {400,200,50,10,0}; // i per 100000 sends gets delay
 
 
 // Debug, temporary
@@ -94,27 +97,7 @@ int sim_sendto(int p_sockfd, struct s_packet *p_packet, int p_bytes_in_packet, c
     return err;
 }
 
-uint16_t calc_checksum(uint8_t* addr, uint32_t  count){ // https://www.csee.usf.edu/~kchriste/tools/checksum.c
-  register uint32_t sum = 0;
 
-  // Main summing loop
-  while(count > 1)
-  {
-    sum = sum + *((uint16_t *) addr);
-    addr += 2;
-    count = count - 2;
-  }
-
-  // Add left-over byte, if any
-  if (count > 0)
-    sum = sum + *((uint8_t *) addr);
-
-  // Fold 32-bit sum to 16 bits
-  while (sum>>16)
-    sum = (sum & 0xFFFF) + (sum >> 16);
-
-  return(~sum);
-}
 
 void check_if_delay(){
     int randomnum = rand() % 10000; // 0 - 9999
@@ -214,13 +197,30 @@ static void close_wave_file(struct wave_file *wf) {
 
 
 
-int main(){
+int main(int argc, char *argv[]){
 
+  int opt;
+  int min_buffer = 65536;
+  opterr = 0;
+  char* filename = NULL;
+  while ((opt = getopt(argc, argv, OPTSTR)) != EOF)
+     switch(opt) {
+         case 'f':
+            filename = optarg;
+            printf("Minimum buffer fill required to start playing set to: %i\n", min_buffer);
+            break;
+         // default:
+         //    break;
+     }
+  if (filename == NULL){
+    printf(" Usage: ./server -f [filename] \n");
+    exit(0);
+  }
   srand (time(NULL)); // Seed randomizer
 
 
   // TODO: Parse command-line options
-  char *filename = "tubthumping.wav";
+  //char *filename = "tubthumping.wav";
 
   // Open the WAVE file
   if (open_wave_file(&wf, filename) < 0)
@@ -255,17 +255,17 @@ int main(){
   uint8_t* currentp = wf.samples;
 
   const int samples_per_packet = 4; // Hardcoded
-  uint16_t data_bytes = samples_per_packet * SAMPLE_SIZE;
-  uint32_t bytes_in_packet = sizeof(struct s_packet) + data_bytes; // 4 + 4 + 2 + 2 + 4 + 16 = 32
+  uint16_t max_data_bytes = samples_per_packet * SAMPLE_SIZE;
+  uint32_t max_bytes_in_packet = sizeof(struct s_packet) + max_data_bytes; // 4 + 4 + 2 + 2 + 4 + 16 = 32
 
-  uint8_t* packetbuffer = malloc(bytes_in_packet);
-  memset(packetbuffer, 0, bytes_in_packet);
+  uint8_t* packetbuffer = malloc(max_bytes_in_packet);
+  memset(packetbuffer, 0, max_bytes_in_packet);
 
   struct s_packet *packet;
   printf("size of s_packet: %lu\n", sizeof(struct s_packet));
-  packet = malloc(bytes_in_packet);
+  packet = malloc(max_bytes_in_packet);
   uint8_t* compr_recv_buffer = malloc(sizeof(uint8_t));
-  memset(packet, 0, bytes_in_packet);
+  memset(packet, 0, max_bytes_in_packet);
 
   uint8_t current_compression = 0;
 
@@ -278,12 +278,12 @@ int main(){
     // Do compression and data copy into packet
     switch (current_compression){
       case 0:
-        packet->data_bytes = data_bytes;
+        packet->data_bytes = max_data_bytes;
         memcpy(packet->data, currentp, packet->data_bytes);
         break;
       case 1:
         // Reduce bitrate from 16 bit to 8 bit --- 4 bytes per sample to 2
-        packet->data_bytes = data_bytes/2;
+        packet->data_bytes = max_data_bytes/2;
         for (int i = 0; i < samples_per_packet * (SAMPLE_SIZE / 2); i++)
           memcpy(packet->data + i, currentp + (i*2) + 1, 1);
         break;
@@ -314,9 +314,9 @@ int main(){
     packet->compression_level = current_compression;
     packet->checksum = 0;
 
-    //packet->checksum = calc_checksum((uint8_t *)packet, bytes_in_packet);
+    packet->checksum = calc_checksum((uint8_t *)packet, sizeof(struct s_packet) + packet->data_bytes);
 
-    currentp += data_bytes;
+    currentp += max_data_bytes;
 
 
     // --------------------------------------------------
@@ -385,11 +385,16 @@ int main(){
   }
   printf("finished final send succesfully\n");
 
+  close_wave_file(&wf);
+
+
+
+
   printf("Total num bytes: %u\n", num_samples * SAMPLE_SIZE);
-  printf("Total num bytes sent: %i\n", numsends * data_bytes);
+  printf("Total num bytes sent: %i\n", numsends * max_data_bytes);
   printf("Total num sends: %i\n", numsends);
   printf("Total num drops: %i\n", numdrops);
-  printf("Total num bytes dropped: %i\n", numdrops * data_bytes);
+  printf("Total num bytes dropped: %i\n", numdrops * max_data_bytes);
   printf("Perc sends dropped: %.2f\n", (float)numdrops / (float)numsends * 100.0f);
 
 

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <getopt.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -16,6 +17,8 @@
 
 #include "../communication/asp/asp.h"
 #include "../progressbar/progressbar.h"
+
+#define OPTSTR "b:"
 
 #define BIND_PORT 1235
 
@@ -31,6 +34,7 @@
 
 #define MAX_PACKET_SIZE 256
 
+#define COMPRESSION_UPDATING_ENABLED 1 // If 1 the client will tell the server what level of compression it wants according to the packet droprate
 #define ROLLING_AVERAGE_LENGTH 4
 const float compression_thresholds[4] = {5000.0f,15000.0f,30000.0f, 40000.0f}; // 4 thresholds, 5 compression levels
 
@@ -48,12 +52,14 @@ struct threadargs {
     uint8_t** p_samplebuffer;
     uint32_t* p_lastsampleset;
     uint32_t* p_totalsamples;
+    int p_minbuffer;
 };
 
 void *liveplaybuffer(void *args){
   uint32_t* lastsampleset = ((struct threadargs*)args)->p_lastsampleset;
   uint32_t* totalsamples = ((struct threadargs*)args)->p_totalsamples;
   uint8_t* samplebuffer = *(((struct threadargs*)args)->p_samplebuffer);
+  int minbuffer = ((struct threadargs*)args)->p_minbuffer;
 
   // Setup audio device
   // Open audio device
@@ -80,7 +86,8 @@ void *liveplaybuffer(void *args){
   }
   uint32_t pollsampleset = 0;
   // Wait for buffer to fill to minimum level
-  while (pollsampleset < 32896){
+  //printf("minbuffer: %i", minbuffer);
+  while (pollsampleset < minbuffer){
     pthread_mutex_lock(&lock);
     pollsampleset = *(lastsampleset);
     pthread_mutex_unlock(&lock);
@@ -124,56 +131,23 @@ void *liveplaybuffer(void *args){
 
 
   } while (!done);
-
-
-  //
-  // printf("THREAD lastsampleset: %u\n", *(lastsampleset));
-  // if (*(lastsampleset) > 0){
-  //   printf("eerste data uit samplebuffer: %u\n", samplebuffer[0]);
-  // }
-  //
-
-
-
-
-
-  //
-  // for (int i = 0; i < number_samples*4 ; i += 1024){
-  //   //printf("i: %i", i);
-  //   snd_pcm_sframes_t preframes = snd_pcm_writei(snd_handle,
-  //                   pbuf, 1024 / SAMPLE_SIZE);
-  //   pbuf += 1024;
-  //   //printf("preframes: %u", preframes);
-  // }
-
-
-  //
-  // for (int i = 0; i < 10; i++){
-  //   pthread_mutex_lock(&lock);
-  //   printf("THREAD lastsampleset: %u\n", *(lastsampleset));
-  //   if (*(lastsampleset) > 0){
-  //     printf("eerste data uit samplebuffer: %u\n", samplebuffer[0]);
-  //   }
-  //   pthread_mutex_unlock(&lock);
-  //   sleep(1);
-  // }
-  //printf("live playing\n");
   return NULL;
 }
 
-int main(){
-//  int sockfd;
-  printf("\n");
-  print_progress(5, 10);
-  printf("\n");
-  print_progress(8, 8);
-  printf("\n");
-  //printf("\33[2J\r");
-  printf("\33[2A\r");
-  print_progress(10, 15);
-  printf("\n");
-  print_progress(15, 30);
-  printf("\n");
+int main(int argc, char *argv[]){
+  int opt;
+  int min_buffer = 65536;
+  opterr = 0;
+  while ((opt = getopt(argc, argv, OPTSTR)) != EOF)
+     switch(opt) {
+         case 'b':
+            min_buffer = (int)strtol(optarg, NULL, 10);
+            printf("Minimum buffer fill required to start playing set to: %i\n", min_buffer);
+            break;
+         default:
+            break;
+     }
+
   struct sockaddr_in servaddr, cliaddr;
 
   sockfd = setup_socket(&servaddr, &cliaddr);
@@ -190,13 +164,13 @@ int main(){
 
   uint32_t number_samples;
   uint32_t firstlocnum;
-  printf("postmalloc\n");
+  printf("Waiting for server to respond...\n");
   fd_set readfds, masterfds;
   struct timeval timeout;
   bool firstrecieve = 0;
   socklen_t len = sizeof(servaddr);
+
   do {
-    printf("loop\n");
     timeout.tv_sec = 0;                    /*set the timeout to 10 seconds*/
     timeout.tv_usec = 100000;
 
@@ -258,14 +232,13 @@ int main(){
   t_args->p_lastsampleset = &lastsampleset;
   t_args->p_samplebuffer = &fullsamplebuffer;
   t_args->p_totalsamples = &number_samples;
+  t_args->p_minbuffer = min_buffer;
+
 
   pthread_t audiothread;
   int pthreaderr = pthread_create(&audiothread, NULL, &liveplaybuffer, (void*) t_args);
         if (pthreaderr != 0)
             printf("\ncan't create thread :[%s]", strerror(pthreaderr));
-
-
-  printf("POST SETUP\n");
 
   // Start recieving all data;
   uint32_t totalbytesrecieved = packet->data_bytes;
@@ -278,12 +251,12 @@ int main(){
   uint32_t last_check_num = 0;
   int last_check_num_bytes_recieved = 0;
   uint32_t highest_sample_number = 0;
+  uint32_t totalbytesexpected = 0;
 
   uint32_t last3dropped[3] = {0};
   uint8_t valuetochangearray = 0;
+  bool established_average = false;
 
-
-  printf("start RECIEVE\n");
   uint32_t progressstep = packet->num_samples / 60;
   uint32_t currentstep = 0;
   int n;
@@ -313,7 +286,17 @@ int main(){
     else {
       // | num_samples   | sample_number | data_bytes | compression_level | databytes...
       // | 4 bytes       | 4 bytes       | 2 bytes    | 2 bytes       | 4 bytes per sample ...
-      //printf("num samples in packet: %u\n", packet->samples_in_data);
+
+      // Check Checksum
+      uint16_t checksumstore = packet->checksum;
+      packet->checksum = 0;
+      if (checksumstore != calc_checksum((uint8_t*)packet, sizeof(struct s_packet) + packet->data_bytes)){
+        printf("ERROR CHECKSUM\n");
+        printf("Checksum in packet: %u\n", checksumstore);
+        printf("Checksum in packet: %u\n", calc_checksum((uint8_t*)packet, sizeof(struct s_packet) + packet->data_bytes));
+        exit(-1);
+      }
+
       switch (packet->compression_level){
         case 1:
         case 3:
@@ -336,43 +319,45 @@ int main(){
       pthread_mutex_unlock(&lock);
       // Release lock
 
-      if (1){
+    if (COMPRESSION_UPDATING_ENABLED){
       // Quality Check
       if (packet->sample_number > highest_sample_number) highest_sample_number = packet->sample_number;
       totalbytesrecieved += packet->data_bytes;
       if (last_check_num + 32896 < packet->sample_number){
         // Do quality check
-        uint32_t expected_bytes_recv;
-        if (packet->compression_level == 0){
-          expected_bytes_recv = (highest_sample_number - last_check_num) * 4; // 4 bytes
+        uint32_t expected_bytes_recv = 0;
+        switch (packet->compression_level){
+          case 0:
+            expected_bytes_recv = (highest_sample_number - last_check_num) * 4; // 4 bytes
+            break;
+          case 1:
+            expected_bytes_recv = (highest_sample_number - last_check_num) * 2; // 2 bytes
+            break;
+          case 2:
+            expected_bytes_recv = (highest_sample_number - last_check_num) * 3; // 3 bytes
+            break;
+          case 3:
+            expected_bytes_recv = (((highest_sample_number - last_check_num) * 3) / 2); // 1.5 bytes
+            break;
+          case 4:
+            expected_bytes_recv = (highest_sample_number - last_check_num) / 2; // effectively 0.5 bytes
+            break;
         }
-        if (packet->compression_level == 1){
-          expected_bytes_recv = (highest_sample_number - last_check_num) * 2; // 2 bytes
-        }
-        if (packet->compression_level == 2){
-          expected_bytes_recv = (highest_sample_number - last_check_num) * 3; // 3 bytes
-          printf("Number samples checking: %u\n", (highest_sample_number - last_check_num));
-          printf("Number bytes exprected: %u\n", expected_bytes_recv);
 
-        }
-        if (packet->compression_level == 3){
-          expected_bytes_recv = (((highest_sample_number - last_check_num) * 3) / 2); // 1.5 bytes
-        }
-        if (packet->compression_level == 4){
-          expected_bytes_recv = (highest_sample_number - last_check_num) / 2; // 0.5 bytes
-        }
-
-
+        totalbytesexpected += expected_bytes_recv;
         uint32_t actual_bytes_recv = totalbytesrecieved - last_check_num_bytes_recieved;
 
-        last3dropped[valuetochangearray] = expected_bytes_recv - actual_bytes_recv;
+        if (actual_bytes_recv > expected_bytes_recv) last3dropped[valuetochangearray] = 0;
+        else last3dropped[valuetochangearray] = expected_bytes_recv - actual_bytes_recv;
+
         valuetochangearray++;
-        if (valuetochangearray == 3) valuetochangearray = 0;
-
+        if (valuetochangearray == 3) {
+          valuetochangearray = 0;
+          if (!established_average){
+            established_average = true;
+          }
+        }
         last_check_num_bytes_recieved = totalbytesrecieved;
-
-
-
         last_check_num = highest_sample_number;
         // Record 3 most recent number of bytes dropped
 
@@ -382,11 +367,8 @@ int main(){
         // If average surpasses threasholds change compression
         uint8_t req_compression = calc_compr_level(droppedavg, packet->compression_level);
 
-        //last_check_num_bytes_recieved = current_num_bytes_dropped;
-
-
         // SEND requested compression level IF not already compression compression_level
-        if (req_compression != packet->compression_level){
+        if (req_compression != packet->compression_level && established_average){
             printf("Asking compression_level: %u, Avg dropped packets: %.2f\n", req_compression, droppedavg);
             memcpy(sendbuffer, &req_compression, sizeof(uint8_t));
 
@@ -403,7 +385,7 @@ int main(){
     }
 
   }while (recieving);
-  printf("\nFINISHED\n");
+  printf("\nStreaming Finished! The audio will keep playing untill the song is finished\n");
 
   // Setting lastsampleset to final sample;
 
@@ -411,15 +393,17 @@ int main(){
   if (lastsampleset != number_samples - 1)
     lastsampleset = number_samples - 1;
   pthread_mutex_unlock(&lock);
-
+  if ((int)totalbytesexpected - (int)totalbytesrecieved < 0) totalbytesexpected = totalbytesrecieved;
   //printf("final num: %u\n", locnum);
-  printf("Total data bytes: %u\n", number_samples*SAMPLE_SIZE);
-  printf("Total number of packets: %u\n", number_samples*SAMPLE_SIZE / packet->data_bytes);
+  printf("Total data bytes expected: %u\n", totalbytesexpected);
+  //printf("Total number of packets: %u\n", number_samples*SAMPLE_SIZE / packet->data_bytes);
   printf("Total number of bytes recieved: %u\n", totalbytesrecieved);
 
-  printf("Total number of data bytes dropped: %u\n", number_samples*SAMPLE_SIZE - totalbytesrecieved);
-  float perc_bytes_dropped = (((float)(number_samples*SAMPLE_SIZE - totalbytesrecieved) / (float)(number_samples*SAMPLE_SIZE)) * 100.0f);
+  printf("Total number of data bytes dropped: %u\n", totalbytesexpected - totalbytesrecieved);
+  float perc_bytes_dropped = (((float)(totalbytesexpected - totalbytesrecieved) / (float)(totalbytesexpected)) * 100.0f);
   printf("Percentage of data bytes dropped: %.2f\n", perc_bytes_dropped);
+
+  printf("Percentage data compressed/dropped to from original: %.2f\n", ((float)totalbytesrecieved / (float)(number_samples*SAMPLE_SIZE)) * 100.0f);
   //
   // printf("Percetage of packets dropped: %0.2f\n", perc_bytes_dropped);
 
@@ -494,7 +478,7 @@ int send_startup(int sockfd, const struct sockaddr *server_addr, int p_server_ad
   int setuperr = sendto(sockfd, (const char *)hello, strlen(hello),
       MSG_CONFIRM, server_addr,
           p_server_addr_len);
-  printf("Setup message sent.\n");
+  //printf("Setup message sent.\n");
 
   if (setuperr <= 0){
 
