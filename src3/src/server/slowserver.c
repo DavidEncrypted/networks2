@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -15,7 +16,7 @@
 #include <alsa/asoundlib.h>
 
 #include "../communication/asp/asp.h"
-
+#include "../progressbar/progressbar.h"
 
 
 //static int asp_socket_fd = -1;
@@ -31,6 +32,15 @@ static int sockfd = -1;
 // worst -- good
 //   1   --  5
 #define CONNECTION_QUALITY 5
+#define PACKET_DELAY_LENGTH 200000 // microseconds
+
+const int qualitydroplookup[5] = {30,60,80,90,100};
+const int qualitydelaylookup[5] = {400,200,50,10,0}; // i per 100000 sends get delay
+
+
+// Debug, temporary
+int numdrops = 0;
+int numsends = 0;
 
 int setup_socket(struct sockaddr_in *p_servaddr, struct sockaddr_in *p_cliaddr){
 
@@ -65,12 +75,52 @@ int setup_socket(struct sockaddr_in *p_servaddr, struct sockaddr_in *p_cliaddr){
 
 int sim_sendto(int p_sockfd, struct s_packet *p_packet, int p_bytes_in_packet, const struct sockaddr * p_cliaddr, int p_len){
 
-    int err = sendto(p_sockfd, p_packet, p_bytes_in_packet,
-        MSG_CONFIRM, p_cliaddr,
-            p_len);
+    int randomdelay = rand() % 1000000; // 0 - 99
+    // Check if we delay
+    if (randomdelay < qualitydelaylookup[CONNECTION_QUALITY-1]){
+        usleep(PACKET_DELAY_LENGTH);
+    }
 
+    int randomnum = rand() % 100; // 0 - 99
+    // Send
+    int err = 0;
+    if (randomnum < qualitydroplookup[CONNECTION_QUALITY-1]){
+        err = sendto(p_sockfd, p_packet, p_bytes_in_packet,
+            MSG_CONFIRM, p_cliaddr,
+                p_len);
+    }
+    else numdrops++;
+    numsends++;
     return err;
 }
+
+uint16_t calc_checksum(uint8_t* addr, uint32_t  count){ // https://www.csee.usf.edu/~kchriste/tools/checksum.c
+  register uint32_t sum = 0;
+
+  // Main summing loop
+  while(count > 1)
+  {
+    sum = sum + *((uint16_t *) addr);
+    addr += 2;
+    count = count - 2;
+  }
+
+  // Add left-over byte, if any
+  if (count > 0)
+    sum = sum + *((uint8_t *) addr);
+
+  // Fold 32-bit sum to 16 bits
+  while (sum>>16)
+    sum = (sum & 0xFFFF) + (sum >> 16);
+
+  return(~sum);
+}
+
+void check_if_delay(){
+    int randomnum = rand() % 10000; // 0 - 9999
+
+}
+
 
 struct wave_header {
     char riff_id[4];
@@ -166,6 +216,9 @@ static void close_wave_file(struct wave_file *wf) {
 
 int main(){
 
+  srand (time(NULL)); // Seed randomizer
+
+
   // TODO: Parse command-line options
   char *filename = "tubthumping.wav";
 
@@ -186,10 +239,6 @@ int main(){
   size_t recievelen;
 
 
-
-  //printf("size of packet alloc + 16: %lu\n", sizeof(*(packet)));
-
-
   printf("Start recieve wait\n");
   // Recieve client setup
   char* buffer = malloc(sizeof(char) * 128);
@@ -205,57 +254,124 @@ int main(){
 
   uint8_t* currentp = wf.samples;
 
-  int samples_per_packet = 4;
+  const int samples_per_packet = 4; // Hardcoded
   uint16_t data_bytes = samples_per_packet * SAMPLE_SIZE;
-  int bytes_in_packet = sizeof(struct s_packet) + data_bytes; // 4 + 4 + 2 + 2 + 16 = 28
+  uint32_t bytes_in_packet = sizeof(struct s_packet) + data_bytes; // 4 + 4 + 2 + 2 + 4 + 16 = 32
+
   uint8_t* packetbuffer = malloc(bytes_in_packet);
   memset(packetbuffer, 0, bytes_in_packet);
-  const uint16_t quality = 1;
 
   struct s_packet *packet;
   printf("size of s_packet: %lu\n", sizeof(struct s_packet));
   packet = malloc(bytes_in_packet);
+  uint8_t* compr_recv_buffer = malloc(sizeof(uint8_t));
   memset(packet, 0, bytes_in_packet);
 
+  uint8_t current_compression = 0;
 
-
-  // | num_samples   | sample_number | data_bytes | databytes...
-  // | 4 bytes       | 4 bytes       | 2 bytes    | 4 bytes per sample
-  //uint32_t num_samples = 1000064;
   uint32_t i = 0;
-  //uint8_t k = 69;
+  uint32_t progressstep = num_samples / 60;
+  uint32_t currentstep = 0;
+  fd_set readfds, writefds, masterfds;
+  struct timeval timeout;
   while (i < num_samples){
+    // Do compression and data copy into packet
+    switch (current_compression){
+      case 0:
+        packet->data_bytes = data_bytes;
+        memcpy(packet->data, currentp, packet->data_bytes);
+        break;
+      case 1:
+        // Reduce bitrate from 16 bit to 8 bit --- 4 bytes per sample to 2
+        packet->data_bytes = data_bytes/2;
+        for (int i = 0; i < samples_per_packet * (SAMPLE_SIZE / 2); i++)
+          memcpy(packet->data + i, currentp + (i*2) + 1, 1);
+        break;
+      case 2:
+        // with 4 samples per packet this reduces the data transfered by 1/4th
+        packet->data_bytes = (samples_per_packet - 1) * SAMPLE_SIZE;
+        memcpy(packet->data, currentp, packet->data_bytes); // Remove 1 sample from the data
+        break;
+      case 3:
+        // Drop 4th sample and bitreduce to 8 bits
+        packet->data_bytes = ((samples_per_packet - 1) * 2);
+        for (int i = 0; i < ((samples_per_packet - 1) * 2); i++)
+          memcpy(packet->data + i, currentp + (i*2) + 1, 1);
+        break;
+      case 4:
+        // Drop 2,3,4th sample and bitreduce to 8 bits
+        packet->data_bytes = (samples_per_packet * 2) - 6;
+        for (int i = 0; i < (samples_per_packet * 2) - 6; i++)
+          memcpy(packet->data + i, currentp + (i*2) + 1, 1);
+        break;
+    }
+
+
     // copy header into packet
     packet->num_samples = num_samples;
     packet->sample_number = i;
-    packet->data_bytes = data_bytes;
-    packet->quality_level = quality;
+    packet->samples_in_data = samples_per_packet;
+    packet->compression_level = current_compression;
+    packet->checksum = 0;
 
+    //packet->checksum = calc_checksum((uint8_t *)packet, bytes_in_packet);
 
-
-    // memcpy(packetbuffer, &num_samples, sizeof(num_samples));
-    // memcpy(packetbuffer + 4, &i, sizeof(i));
-    // memcpy(packetbuffer + 8, &data_bytes, sizeof(data_bytes));
-    //printf("samples: %u\n", *(packet));
-    //copy data into packet
-    memcpy(packet->data, currentp, data_bytes);
     currentp += data_bytes;
 
-    i += samples_per_packet;
 
-    // int err = sendto(sockfd, packet, bytes_in_packet,
-    //     MSG_CONFIRM, (const struct sockaddr *) &cliaddr,
-    //         len);
-    int err = sim_sendto(sockfd, packet, bytes_in_packet, (const struct sockaddr *) &cliaddr, len);
+    // --------------------------------------------------
+    timeout.tv_sec = 0;                    /*set the timeout to 10 seconds*/
+    timeout.tv_usec = 10000;
 
-    if (err <= 0){
-      printf("ERROR: %i\n", err);
+    FD_ZERO(&masterfds);
+    FD_SET(sockfd, &masterfds);
+
+    memcpy(&readfds, &masterfds, sizeof(fd_set));
+    memcpy(&writefds, &masterfds, sizeof(fd_set));
+
+    if (select(sockfd+1, &readfds, &writefds, NULL, &timeout) < 0)
+    {
+      perror("on select");
+      exit(1);
     }
-    if (i % 10000 == 0){
-      usleep(100);
-      printf("i: %u\n", i);
+    if (FD_ISSET(sockfd, &readfds))
+    {
+      int fn = recvfrom(sockfd, compr_recv_buffer, sizeof(uint8_t),
+             MSG_WAITALL, (struct sockaddr *) &servaddr,
+             &len);
+      if (fn <= 0){
+        perror("recv");
+        exit(-1);
+      }
+      if (fn == sizeof(uint8_t)){
+          printf("\nCompression request: %u\n", *(compr_recv_buffer));
+          current_compression = *(compr_recv_buffer);
+      }
+      else {
+          perror("compr return");
+          exit(-1);
+      }
+    }
+    else
+    {
+
+
+
+        int err = sim_sendto(sockfd, packet, sizeof(struct s_packet) + packet->data_bytes, (const struct sockaddr *) &cliaddr, len);
+        if (err < 0){
+          printf("ERROR: %i\n", err);
+        }
+    }
+    // -------------------------------
+
+
+    i += samples_per_packet;
+    if (i >= (currentstep * progressstep)){
+      print_progress(currentstep, 60);
+      currentstep++;
     }
   }
+  printf("\n");
 
   // DONE -----------------------
 
@@ -268,6 +384,13 @@ int main(){
     printf("ERROR: %i\n", finerr);
   }
   printf("finished final send succesfully\n");
+
+  printf("Total num bytes: %u\n", num_samples * SAMPLE_SIZE);
+  printf("Total num bytes sent: %i\n", numsends * data_bytes);
+  printf("Total num sends: %i\n", numsends);
+  printf("Total num drops: %i\n", numdrops);
+  printf("Total num bytes dropped: %i\n", numdrops * data_bytes);
+  printf("Perc sends dropped: %.2f\n", (float)numdrops / (float)numsends * 100.0f);
 
 
 
