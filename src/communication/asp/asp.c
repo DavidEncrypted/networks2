@@ -15,27 +15,26 @@
 
 #include "asp.h"
 
-/* An asp socket descriptor for information about the sockets current state */
-struct asp_socket_info {
-    int sockfd;
 
-    struct sockaddr_in local_addr;
-    socklen_t local_addrlen;
 
-    struct sockaddr_in remote_addr;
-    socklen_t remote_addrlen;
+uint16_t calc_checksum(uint8_t* addr, uint32_t  count){ // https://www.csee.usf.edu/~kchriste/tools/checksum.c
+  register uint32_t sum = 0;
 
-    struct asp_socket_info *next;
+  // Main summing loop
+  while(count > 1)
+  {
+    sum = sum + *((uint16_t *) addr);
+    addr += 2;
+    count = count - 2;
+  }
 
-    int current_quality_level;
-    int sequence_count;
+  // Add left-over byte, if any
+  if (count > 0)
+    sum = sum + *((uint8_t *) addr);
 
-    int packets_received;
-    int packets_missing;
+  // Fold 32-bit sum to 16 bits
+  while (sum>>16)
+    sum = (sum & 0xFFFF) + (sum >> 16);
 
-    struct timeval last_packet_received;
-    struct timeval last_problem;
-
-    unsigned int is_connected : 1;
-    unsigned int has_accepted : 1;
-};
+  return(~sum);
+}

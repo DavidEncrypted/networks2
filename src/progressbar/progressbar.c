@@ -13,7 +13,7 @@
 void
 print_progress(size_t count, size_t max)
 {
-	const char prefix[] = "Progress: [";
+	const char prefix[] = "Stream progress: [";
 	const char suffix[] = "]";
 	const size_t prefix_length = sizeof(prefix) - 1;
 	const size_t suffix_length = sizeof(suffix) - 1;
